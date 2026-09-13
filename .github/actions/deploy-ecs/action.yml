@@ -1,0 +1,157 @@
+name: Deploy to ECS
+description: >-
+  Register a new task definition revision with a given image, roll the service,
+  wait for it to stabilise, verify the deployed version, and roll back on
+  failure. Shared by the staging and production jobs so the two paths cannot
+  drift apart.
+
+inputs:
+  cluster:
+    description: ECS cluster name
+    required: true
+  service:
+    description: ECS service name
+    required: true
+  task-family:
+    description: Task definition family
+    required: true
+  image-uri:
+    description: Fully qualified image URI, including the tag
+    required: true
+  app-version:
+    description: Version string the deployed service must report at /health
+    required: true
+  health-url:
+    description: Health endpoint to verify after the rollout
+    required: true
+  wait-timeout-minutes:
+    description: How long to wait for the service to stabilise
+    required: false
+    default: "10"
+
+runs:
+  using: composite
+  steps:
+    - name: Register new task definition revision
+      id: register
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Start from the live task definition rather than from a file in the
+        # repository. Anything Terraform changed (cpu, memory, secrets, roles)
+        # is preserved; this deploy only changes the image and the version.
+        aws ecs describe-task-definition \
+          --task-definition "${{ inputs.task-family }}" \
+          --query taskDefinition > current.json
+
+        # Capture the currently deployed revision so the rollback step has
+        # somewhere concrete to go back to.
+        PREVIOUS=$(aws ecs describe-services \
+          --cluster "${{ inputs.cluster }}" \
+          --services "${{ inputs.service }}" \
+          --query 'services[0].taskDefinition' --output text)
+        echo "previous=$PREVIOUS" >> "$GITHUB_OUTPUT"
+
+        jq --arg image "${{ inputs.image-uri }}" \
+           --arg version "${{ inputs.app-version }}" '
+          .containerDefinitions[0].image = $image
+          | .containerDefinitions[0].environment = (
+              (.containerDefinitions[0].environment // [])
+              | map(select(.name != "APP_VERSION"))
+              + [{name: "APP_VERSION", value: $version}]
+            )
+          # Fields the API returns but refuses to accept back on register.
+          | del(
+              .taskDefinitionArn, .revision, .status, .requiresAttributes,
+              .compatibilities, .registeredAt, .registeredBy, .deregisteredAt
+            )
+        ' current.json > new.json
+
+        NEW_ARN=$(aws ecs register-task-definition \
+          --cli-input-json file://new.json \
+          --query 'taskDefinition.taskDefinitionArn' --output text)
+
+        echo "new=$NEW_ARN" >> "$GITHUB_OUTPUT"
+        echo "Registered $NEW_ARN"
+
+    - name: Roll the service
+      shell: bash
+      run: |
+        set -euo pipefail
+        aws ecs update-service \
+          --cluster "${{ inputs.cluster }}" \
+          --service "${{ inputs.service }}" \
+          --task-definition "${{ steps.register.outputs.new }}" \
+          --query 'service.deployments[0].{status:rolloutState,desired:desiredCount}' \
+          --output table
+
+    - name: Wait for the service to stabilise
+      id: wait
+      shell: bash
+      run: |
+        set -euo pipefail
+        # The service has a deployment circuit breaker with rollback enabled, so
+        # a crashlooping task reverts on its own. This wait is what turns that
+        # into a red pipeline instead of a silent revert nobody notices.
+        timeout "${{ inputs.wait-timeout-minutes }}m" aws ecs wait services-stable \
+          --cluster "${{ inputs.cluster }}" \
+          --services "${{ inputs.service }}"
+
+    - name: Verify the deployed version
+      id: verify
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # "The rollout finished" and "the new code is serving traffic" are not
+        # the same claim. This checks the second one.
+        for attempt in $(seq 1 20); do
+          if body=$(curl -fsS --max-time 10 "${{ inputs.health-url }}"); then
+            echo "$body"
+            if echo "$body" | jq -e --arg v "${{ inputs.app-version }}" '.version == $v' > /dev/null; then
+              echo "Verified ${{ inputs.app-version }} is serving traffic"
+              exit 0
+            fi
+            echo "Health endpoint is up but still reporting $(echo "$body" | jq -r .version)"
+          fi
+          sleep 10
+        done
+
+        echo "::error::${{ inputs.health-url }} never reported version ${{ inputs.app-version }}"
+        exit 1
+
+    - name: Roll back
+      if: failure() && steps.register.outputs.previous != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "::warning::Deploy failed - reverting to ${{ steps.register.outputs.previous }}"
+
+        aws ecs update-service \
+          --cluster "${{ inputs.cluster }}" \
+          --service "${{ inputs.service }}" \
+          --task-definition "${{ steps.register.outputs.previous }}" > /dev/null
+
+        aws ecs wait services-stable \
+          --cluster "${{ inputs.cluster }}" \
+          --services "${{ inputs.service }}"
+
+        echo "Rolled back."
+
+    - name: Deployment summary
+      if: always()
+      shell: bash
+      run: |
+        {
+          echo "### Deploy to \`${{ inputs.cluster }}\`"
+          echo ""
+          echo "| Field | Value |"
+          echo "|---|---|"
+          echo "| Service | \`${{ inputs.service }}\` |"
+          echo "| Image | \`${{ inputs.image-uri }}\` |"
+          echo "| Version | \`${{ inputs.app-version }}\` |"
+          echo "| New revision | \`${{ steps.register.outputs.new }}\` |"
+          echo "| Previous revision | \`${{ steps.register.outputs.previous }}\` |"
+          echo "| Health check | ${{ steps.verify.outcome }} |"
+        } >> "$GITHUB_STEP_SUMMARY"

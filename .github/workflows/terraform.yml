@@ -1,0 +1,158 @@
+# Infrastructure gate.
+#
+# Split from ci.yml because it runs on a different trigger path and needs
+# different permissions: this one writes PR comments, CI does not.
+
+name: Terraform
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "infrastructure/**"
+      - ".github/workflows/terraform.yml"
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write # OIDC, for the optional plan step
+
+env:
+  TF_VERSION: "1.16.2"
+  AWS_REGION: ap-south-1
+
+jobs:
+  validate:
+    name: Validate and scan
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both environments are validated on every infrastructure change. They
+        # share modules, so a change that only breaks production is exactly the
+        # change this catches.
+        env_dir: [staging, prod]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Format check
+        # Runs once, over the whole tree, not per matrix entry.
+        if: matrix.env_dir == 'staging'
+        run: terraform fmt -check -recursive -diff infrastructure/
+
+      - name: Init
+        # -backend=false: validation needs the modules and the provider schema,
+        # not the state. This is what lets the whole gate run with no AWS
+        # credentials at all.
+        run: terraform -chdir=infrastructure/terraform/environments/${{ matrix.env_dir }} init -backend=false -input=false
+
+      - name: Validate
+        run: terraform -chdir=infrastructure/terraform/environments/${{ matrix.env_dir }} validate
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: terraform-linters/setup-tflint@1cf010d3c7aef302051ccdb68c14c5dc2efa34ef # v6.3.1
+        with:
+          tflint_version: latest
+
+      - name: Init tflint
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run tflint
+        run: tflint --chdir=infrastructure/terraform --recursive --format compact
+
+  checkov:
+    name: Checkov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Static security analysis
+        uses: bridgecrewio/checkov-action@99bb2caf247dfd9f03cf984373bc6043d4e32ebf # v12.1347.0
+        with:
+          directory: infrastructure/terraform
+          framework: terraform
+          quiet: true
+          soft_fail: false
+          # Suppressions are explicit and justified rather than a blanket
+          # soft_fail, so a new finding still fails the build.
+          skip_check: >-
+            CKV_AWS_18,CKV_AWS_144,CKV_AWS_145,CKV2_AWS_62,CKV_AWS_150,CKV_AWS_378
+          download_external_modules: false
+
+  plan:
+    name: Plan (staging)
+    runs-on: ubuntu-latest
+    needs: [validate, tflint, checkov]
+    # A plan needs real credentials and real state. The repository variable acts
+    # as the switch: without it the gate above still runs in full, which is what
+    # makes this repository reviewable without an AWS account.
+    if: vars.AWS_PLAN_ROLE_ARN != ''
+    environment: staging-plan
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Assume read-only plan role
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          # OIDC: a short-lived token exchanged per run. No AWS access keys are
+          # stored in the repository at all.
+
+      - name: Init with backend
+        run: |
+          terraform -chdir=infrastructure/terraform/environments/staging init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ env.AWS_REGION }}"
+
+      - name: Plan
+        id: plan
+        run: |
+          terraform -chdir=infrastructure/terraform/environments/staging plan -input=false -no-color -lock=false \
+            -out=tfplan | tee plan.txt
+        continue-on-error: true
+
+      - name: Comment plan on the pull request
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            let plan = fs.readFileSync('plan.txt', 'utf8');
+            // Comments are capped at 65536 characters; keep the tail, which is
+            // where the resource summary lives.
+            const limit = 60000;
+            if (plan.length > limit) {
+              plan = '...truncated...\n' + plan.slice(-limit);
+            }
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `#### Terraform plan (staging)\n\n<details><summary>Show plan</summary>\n\n\`\`\`terraform\n${plan}\n\`\`\`\n\n</details>`,
+            });
+
+      - name: Fail if the plan failed
+        if: steps.plan.outcome == 'failure'
+        run: exit 1

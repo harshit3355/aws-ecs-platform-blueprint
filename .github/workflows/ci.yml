@@ -1,0 +1,244 @@
+# Pull request gate.
+#
+# Every third-party action is pinned to a full commit SHA rather than a tag.
+# Tags are mutable: in March 2026 aquasecurity/trivy-action had 75 tags
+# retargeted at a credential stealer, and every workflow pinned to a tag pulled
+# it automatically. A SHA cannot be repointed.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# One run per branch. A superseded push should not keep burning runners.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.14"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: services/api/requirements-dev.txt
+
+      - name: Install dev dependencies
+        run: pip install -r services/api/requirements-dev.txt
+
+      - name: Ruff lint
+        run: ruff check --output-format=github .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    # A real PostgreSQL, not a mock. The integration tests assert on behaviour
+    # that only a real engine has: server_default timestamps, 422-before-insert
+    # validation ordering, and the actual connection path.
+    services:
+      postgres:
+        image: postgres:18.6-trixie
+        env:
+          POSTGRES_USER: appuser
+          POSTGRES_PASSWORD: appsecret
+          POSTGRES_DB: appdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U appuser -d appdb"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: appdb
+      DB_USER: appuser
+      DB_PASSWORD: appsecret
+      # The postgres service container has ssl off. The application
+      # defaults to require, which is what RDS enforces in every real
+      # environment; this override exists only for the test container.
+      DB_SSLMODE: disable
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: services/api/requirements-dev.txt
+
+      - name: Install dev dependencies
+        run: pip install -r services/api/requirements-dev.txt
+
+      - name: Unit tests
+        run: pytest -v -m "not integration" --cov=app --cov-report=term-missing
+
+      - name: Integration tests
+        # No -m filter and no skips: if the database is unreachable here that is
+        # a CI failure, not a reason to quietly pass.
+        run: pytest -v -m integration --cov=app --cov-append --cov-report=xml
+
+      - name: Fail if integration tests were skipped
+        # The db_client fixture skips when PostgreSQL is unreachable, which is
+        # correct on a laptop and unacceptable here. Without this check a broken
+        # service container would turn into a green build.
+        run: |
+          if pytest -m integration --collect-only -q 2>/dev/null | grep -q "no tests ran"; then
+            echo "::error::Integration tests did not run"
+            exit 1
+          fi
+          pytest -m integration -q --no-header 2>&1 | tee /tmp/integration.txt
+          if grep -qE "[0-9]+ skipped" /tmp/integration.txt; then
+            echo "::error::Integration tests were skipped - the PostgreSQL service container is not reachable"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage
+          path: coverage.xml
+          retention-days: 7
+
+  dependency-scan:
+    name: Dependency vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pip-audit
+        run: pip install pip-audit==2.10.1
+
+      - name: Audit runtime dependencies
+        # Fails the build on any known CVE in a pinned dependency. Pinning exact
+        # versions is what makes this signal actionable rather than noisy.
+        run: pip-audit -r services/api/requirements.txt --progress-spinner off
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          scanners: vuln,secret,misconfig
+
+  container-scan:
+    name: Build and scan image
+    # ARM64 runner so the image is built natively for the Fargate ARM64 runtime
+    # platform. Cross-building under QEMU works but is several times slower.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ./services/api
+          platforms: linux/arm64
+          push: false
+          load: true
+          tags: meridian-api:ci
+          build-args: |
+            APP_VERSION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: meridian-api:ci
+          severity: HIGH,CRITICAL
+          # ignore-unfixed keeps the gate meaningful: blocking on a CVE with no
+          # released fix teaches people to disable the gate, not to patch.
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Smoke test the built image
+        # Proves the image actually starts and serves /health before it is ever
+        # considered for a deploy. A scan says the image is safe; this says it works.
+        run: |
+          docker run -d --name smoke -p 8000:8000 \
+            -e DB_HOST=127.0.0.1 -e APP_VERSION=${{ github.sha }} \
+            meridian-api:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health > /tmp/health.json; then
+              cat /tmp/health.json
+              grep -q "${{ github.sha }}" /tmp/health.json
+              docker rm -f smoke
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Image failed to serve /health within 60s"
+          docker logs smoke
+          docker rm -f smoke
+          exit 1
+
+  workflow-lint:
+    name: Workflow lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: actionlint
+        # Run from the pinned release archive rather than an action, so this
+        # check has no third-party action of its own to trust.
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color
+
+  notify:
+    name: Notify on failure
+    runs-on: ubuntu-latest
+    needs: [lint, test, dependency-scan, container-scan, workflow-lint]
+    if: failure() && github.event_name == 'push'
+    steps:
+      - name: Post to Slack
+        # Plain curl rather than a Slack action: the webhook is a credential and
+        # this is the smallest possible amount of third-party code with access
+        # to it. It also cannot break when an action changes its input schema.
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          # Each of these crosses into the script through the environment, never
+          # through a ${{ }} expression inside the shell. A commit message is
+          # attacker-controlled on a fork pull request; interpolated directly it
+          # could close the quote and run arbitrary shell on the runner.
+          BRANCH: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message || github.sha }}
+        if: env.SLACK_WEBHOOK_URL != ''
+        run: |
+          # jq builds the JSON, so quotes and newlines in the commit message are
+          # escaped properly instead of corrupting the payload.
+          jq -n --arg branch "$BRANCH" --arg url "$RUN_URL" --arg msg "$COMMIT_MESSAGE" \
+            '{text: (":rotating_light: *CI failed* on `" + $branch + "`\n<" + $url + "|View run>\n" + $msg)}' \
+            | curl -fsS -X POST -H 'Content-type: application/json' --data @- "$SLACK_WEBHOOK_URL"
