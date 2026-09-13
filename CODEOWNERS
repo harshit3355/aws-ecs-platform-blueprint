@@ -1,0 +1,12 @@
+# Default owner for anything not matched below.
+*                               @harshit3355
+
+# Infrastructure and delivery changes carry the most blast radius, so they are
+# listed explicitly rather than relying on the catch-all above. Add a platform
+# team here as the repository grows.
+/infrastructure/                @harshit3355
+/.github/                       @harshit3355
+/platform/observability/        @harshit3355
+
+# Decision records should be reviewed by whoever will have to live with them.
+/docs/adr/                      @harshit3355

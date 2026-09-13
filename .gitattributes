@@ -1,0 +1,8 @@
+# Normalise to LF in the repository and in the working tree. Shell scripts in
+# workflows and anything COPYed into a Linux container break on CRLF, and this
+# repository is developed on Windows.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary

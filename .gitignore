@@ -1,0 +1,46 @@
+# Terraform
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+# Backend config names the bucket, which identifies the account.
+backend.hcl
+# Never commit a tfvars override; the committed terraform.tfvars holds
+# non-secret defaults only.
+*.auto.tfvars
+override.tf
+override.tf.json
+*_override.tf
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.egg-info/
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Editors, agents and OS
+.idea/
+.vscode/
+.claude/
+.cursor/
+.aider*
+.DS_Store
+Thumbs.db
+
+# Local tooling
+/tools/

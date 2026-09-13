@@ -1,0 +1,26 @@
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+src = ["services/api"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "C4", "SIM", "RUF"]
+ignore = [
+    "S101", # assert is the point in tests
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# Depends()/Query() in argument defaults is the documented FastAPI idiom,
+# not the mutable-default bug B008 exists to catch.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
+
+[tool.ruff.lint.per-file-ignores]
+"services/api/tests/*" = ["S105", "S106"] # hardcoded fake credentials in fixtures
+
+[tool.pytest.ini_options]
+pythonpath = ["services/api"]
+testpaths = ["services/api/tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "integration: requires a reachable PostgreSQL",
+]
