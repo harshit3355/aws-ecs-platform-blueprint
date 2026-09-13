@@ -1,0 +1,9 @@
+# Runtime dependencies, fully pinned. Exact pins (not ranges) so the image that
+# passed CI is the image that reaches production, and so pip-audit/Trivy findings
+# map to a specific known version.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+sqlalchemy==2.0.52
+psycopg[binary]==3.3.5
+pydantic-settings==2.15.0
+prometheus-fastapi-instrumentator==8.1.0
