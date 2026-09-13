@@ -1,0 +1,6 @@
+# Copy to backend.hcl and fill in, then:
+#   terraform init -backend-config=backend.hcl
+#
+# backend.hcl is gitignored: the bucket name identifies the account.
+bucket = "REPLACE-ME-meridian-tfstate"
+region = "ap-south-1"
