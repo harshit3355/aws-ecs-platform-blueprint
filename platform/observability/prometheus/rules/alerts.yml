@@ -1,0 +1,66 @@
+groups:
+  - name: service-availability
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} target {{ $labels.instance }} is down"
+          description: "Prometheus has been unable to scrape the target for 2 minutes."
+
+      - alert: HighErrorRate
+        # Ratio of 5xx to all responses, over a 5m window. Expressed as a ratio
+        # rather than a raw count so it does not fire on a traffic spike and does
+        # not stay silent during a low-traffic outage.
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+          clamp_min(sum(rate(http_requests_total[5m])), 0.001)
+            > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Error rate above 5% for 5 minutes"
+          description: "{{ $value | humanizePercentage }} of requests are returning 5xx."
+
+      - alert: HighLatencyP99
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (rate(http_request_duration_seconds_bucket[5m]))
+          ) > 1.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p99 latency above 1.5s"
+          description: "p99 request duration is {{ $value | humanizeDuration }}."
+
+  - name: database
+    rules:
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is unreachable"
+          description: "The postgres exporter cannot connect to the database."
+
+      - alert: PostgresConnectionsNearLimit
+        # Connection exhaustion is the classic Fargate scale-out failure: every
+        # new task opens a fresh pool and the database, not the app, is the limit.
+        expr: |
+          sum(pg_stat_database_numbackends)
+            /
+          clamp_min(max(pg_settings_max_connections), 1)
+            > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL connections above 80% of max_connections"
+          description: "{{ $value | humanizePercentage }} of available connections are in use."

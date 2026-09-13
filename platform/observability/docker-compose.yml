@@ -1,0 +1,112 @@
+# Local mirror of the production observability story.
+#
+# Production sends infrastructure/RDS/ALB telemetry to CloudWatch (Terraform) and
+# scrapes the same /metrics endpoint with Prometheus. This stack exists so the
+# dashboards and alert rules can be developed, reviewed and demonstrated without
+# an AWS account -- `docker compose up` is the whole setup.
+#
+#   app          http://localhost:8000
+#   prometheus   http://localhost:9090
+#   grafana      http://localhost:3000   (admin / admin)
+
+name: meridian-platform
+
+x-logging: &json-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:18.6-trixie
+    environment:
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: appsecret   # local only; production uses Secrets Manager
+      POSTGRES_DB: appdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appuser -d appdb"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    logging: *json-logging
+
+  app:
+    build:
+      context: ../../services/api
+      args:
+        APP_VERSION: local
+    environment:
+      APP_ENV: local
+      LOG_LEVEL: INFO
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: appdb
+      DB_USER: appuser
+      DB_PASSWORD: appsecret
+      # The official postgres image ships with ssl = off. Production
+      # defaults to require and RDS enforces rds.force_ssl = 1; this is
+      # the one place the override is correct.
+      DB_SSLMODE: disable
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *json-logging
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.20.1
+    environment:
+      DATA_SOURCE_NAME: "postgresql://appuser:appsecret@postgres:5432/appdb?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *json-logging
+
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - promdata:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - app
+    logging: *json-logging
+
+  grafana:
+    image: grafana/grafana:13.2.1
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin   # local only
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"   # so a reviewer can open the dashboards without logging in
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      # Dashboards are provisioned from version-controlled JSON, never clicked
+      # together in the UI -- that is the difference between a dashboard and a
+      # dashboard you can rebuild after someone deletes it.
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    logging: *json-logging
+
+volumes:
+  pgdata:
+  promdata:
+  grafanadata:
