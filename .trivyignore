@@ -44,31 +44,3 @@ AVD-AWS-0132
 # as AVD-AWS-0132: a CMK here buys key-policy control we have no requirement
 # for yet, at the cost of another key to administer. Reviewed 2026-09-16.
 AVD-AWS-0136
-
-# CVE-2025-47273 -- path traversal in setuptools' PackageIndex.
-#
-# Accepted, and the reasoning matters more than the acceptance.
-#
-# Reachability: the vulnerable code path is PackageIndex, which runs only when
-# setuptools is used to download packages from an index. The runtime container
-# never invokes setuptools: the application is started by uvicorn from
-# /opt/venv, installs nothing, and runs as a non-root user with a read-only root
-# filesystem. There is no path from a request to this code.
-#
-# Remediation attempted, and what was learned: the declared dependency is pinned
-# to setuptools 84.0.0, which is patched, and the virtualenv demonstrably
-# contains that version. The scanner nonetheless reports 70.3.0, so the copy it
-# finds is not the one requirements.txt governs. System pip and setuptools are
-# removed from the runtime image (worth doing regardless -- a package installer
-# has no business in a running container), and the finding persists, so it is
-# somewhere the removal does not reach.
-#
-# This is exactly the case VEX exists for, and Trivy's own output recommends it.
-# A VEX statement asserting not_affected with justification
-# vulnerable_code_not_in_execute_path is the correct long-term fix and is on the
-# roadmap; this entry is the interim, with the same reasoning written down.
-#
-# Reviewed 2026-09-16. Revisit when the base image ships a patched setuptools,
-# at which point this entry should be deleted rather than renewed.
-exp:2026-12-31
-CVE-2025-47273

@@ -15,10 +15,23 @@ WORKDIR /build
 COPY requirements.txt .
 
 # Dependencies go into their own virtualenv so the runtime stage can copy exactly
-# one directory and inherit none of pip, the wheel cache, or the build toolchain.
+# one directory and inherit none of the wheel cache or the build toolchain.
+#
+# pip and setuptools are then deleted from the virtualenv itself. Nothing at
+# runtime installs packages, and they are not inert: pip vendors its own copies
+# of several libraries, so a scanner reads that whole vendored tree as installed
+# dependencies. msgpack GHSA-6v7p-g79w-8964 was reported against this image and
+# is reachable only through pip's vendored cachecontrol -- code the container
+# never executes. Removing the installer removes the entire class of finding,
+# and takes a package installer out of a running container besides.
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip setuptools \
-    && /opt/venv/bin/pip install -r requirements.txt
+    && /opt/venv/bin/pip install -r requirements.txt \
+    && find /opt/venv -depth \
+         \( -name "pip" -o -name "pip-*" -o -name "pip.*" \
+            -o -name "setuptools" -o -name "setuptools-*" \
+            -o -name "pkg_resources" -o -name "_distutils_hack*" \) \
+         -exec rm -rf {} +
 
 # ---------- runtime ----------
 FROM ${PYTHON_IMAGE} AS runtime
