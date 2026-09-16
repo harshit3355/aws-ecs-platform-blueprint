@@ -670,3 +670,41 @@ noise the structured logging exists to avoid.
 
 **Resolution.** Remove the `.pth` alongside the module. Deleting a package means
 deleting what registers it, not only its code.
+
+---
+
+## 27. A permission scoped to a name pattern the resource stopped matching
+
+**Symptom.** The delivery pipeline built and scanned the image, then failed to
+push it:
+
+```
+User: .../meridian-github-build is not authorized to perform:
+ecr:InitiateLayerUpload on resource: .../repository/meridian
+```
+
+**Diagnosis.** The build role granted ECR push on
+`arn:aws:ecr:*:<account>:repository/meridian-*`. That matched the old
+per-environment repositories, `meridian-staging` and `meridian-prod`. Entry 23
+replaced them with one shared repository named exactly `meridian` -- which the
+pattern `meridian-*` does not match, because it requires the hyphen.
+
+Consolidating the registry and scoping the permission were the same change, made
+in the same commit, and the second half was not revisited.
+
+**Resolution.** The repository is now defined in the same configuration as the
+role, so the policy references `aws_ecr_repository.app.arn` directly. There is
+no pattern left to drift out of alignment with the thing it is meant to describe.
+
+The same pass tightened the deploy role's ECR read permissions, which had been
+lumped in with `GetAuthorizationToken` and therefore scoped to `*`.
+`GetAuthorizationToken` genuinely accepts no resource ARN; `DescribeImages` and
+`BatchGetImage` do. Splitting them into two statements scopes the two that can
+be scoped.
+
+**The pattern worth naming.** A least-privilege policy written as a string
+pattern is coupled to a naming convention, and nothing enforces that coupling.
+It fails *open* in the sense that it is silent: `terraform validate`, `plan` and
+`apply` all succeed, and you find out at push time. Referencing the resource
+directly makes the coupling structural, so the permission cannot drift away
+from the thing it authorises.

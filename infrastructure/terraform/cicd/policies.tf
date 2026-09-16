@@ -24,9 +24,13 @@ data "aws_iam_policy_document" "build" {
       "ecr:PutImage",
       "ecr:UploadLayerPart",
     ]
-    resources = [
-      "arn:aws:ecr:*:${data.aws_caller_identity.current.account_id}:repository/${var.resource_name_prefix}-*",
-    ]
+    # The repository is defined in this same configuration, so reference its ARN
+    # rather than matching a name pattern. An earlier version scoped this to
+    # "<prefix>-*", which matched the old per-environment repositories and
+    # silently stopped matching when they were replaced by a single repository
+    # named exactly "<prefix>". A policy that grants nothing fails at push time,
+    # not at apply time, which is the worst place to find out.
+    resources = [aws_ecr_repository.app.arn]
   }
 }
 
@@ -88,11 +92,20 @@ data "aws_iam_policy_document" "deploy" {
   }
 
   # Read-only on ECR so a deploy can confirm the tag it is about to ship exists.
+  # Split in two because GetAuthorizationToken accepts no resource ARN, while
+  # the read actions do -- lumping them together would have scoped both to "*".
+  statement {
+    sid       = "EcrAuthToken"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
   statement {
     sid       = "ConfirmImageExists"
     effect    = "Allow"
-    actions   = ["ecr:DescribeImages", "ecr:BatchGetImage", "ecr:GetAuthorizationToken"]
-    resources = ["*"]
+    actions   = ["ecr:DescribeImages", "ecr:BatchGetImage"]
+    resources = [aws_ecr_repository.app.arn]
   }
 }
 
