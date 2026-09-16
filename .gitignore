@@ -33,12 +33,9 @@ htmlcov/
 .env.*
 !.env.example
 
-# Editors, agents and OS
+# Editors and OS
 .idea/
 .vscode/
-.claude/
-.cursor/
-.aider*
 .DS_Store
 Thumbs.db
 

@@ -90,6 +90,63 @@ Why each choice was made: [docs/adr/](docs/adr/README.md).
 
 ---
 
+## Key decisions
+
+Each one below has a full record — including what it cost — in
+[docs/adr/](docs/adr/README.md).
+
+**ECS Fargate, not EKS or EC2**
+
+- EKS means node groups, cluster autoscaler, IRSA, an ingress controller and a
+  Kubernetes upgrade every few months. EC2 means owning AMIs and patching
+- Fargate has no hosts to patch, bills per task, and gives automatic rollback
+  through its deployment circuit breaker
+- **Costs:** no daemonset equivalent, no placement control, higher per-vCPU price
+  at sustained high utilisation
+
+**Three subnet tiers, not two**
+
+- Public (load balancer), private (tasks), database (RDS)
+- The database tier has **no route to the internet at all** — absent, not blocked
+- **Why:** "the database cannot call out" becomes a property of routing, not of a
+  security group rule somebody can widen under pressure
+
+**S3 native state locking, no DynamoDB table**
+
+- `use_lockfile = true`, generally available since Terraform 1.11
+- One fewer resource to create, pay for, and forget to delete
+- **Costs:** a hard floor of Terraform 1.11
+
+**RDS generates and rotates the database password**
+
+- Terraform never receives the value — not in the plan, not in state, not visible
+  to whoever runs the apply
+- **The common alternative** (`random_password` + a secret resource) writes it
+  into state in plaintext, which makes the state bucket a credential store
+
+**Terraform ignores `task_definition` and `desired_count`**
+
+- The pipeline owns which image runs; the autoscaler owns how many tasks run
+- Without this, any `terraform apply` would roll production back to whatever
+  image tag happened to be committed
+- **Costs:** `terraform plan` no longer shows the running image
+
+**One container registry, shared by every environment**
+
+- The pipeline builds once and promotes that same artifact
+- "Production runs what staging ran" is only true if both pull the same bytes
+- It outlives environments, so tearing one down does not destroy rollback targets
+
+**Every third-party action pinned to a commit SHA**
+
+- Tags are movable refs. In March 2026, 75 tags of a widely used scanning action
+  were retargeted at a credential stealer, and every workflow pinned to a tag
+  picked it up automatically
+- **Costs:** updates do not arrive on their own — automated dependency updates
+  are the top roadmap item
+
+---
+
 ## Getting started
 
 ### Run the whole stack locally
@@ -237,10 +294,11 @@ expression with `promtool` in CI, because Grafana renders an invalid query as an
 empty panel — indistinguishable from "no traffic", which is exactly when someone
 is looking at it.
 
-**Logs.** The service emits one JSON object per line. That is what lets the
-CloudWatch metric filter be a structured pattern (`{ $.level = "ERROR" }`)
-rather than a substring match that would also fire on the word ERROR inside
-user-supplied text.
+**Logs**
+
+- The service emits **one JSON object per line**
+- That lets the CloudWatch metric filter match a **field** (`{ $.level = "ERROR" }`)
+- A substring match would also fire on the word ERROR inside user-supplied text
 
 | Log type | Destination |
 |---|---|
@@ -336,14 +394,17 @@ Approximate monthly figures for `ap-south-1`, staging running continuously.
 | Autoscaling floor of 1 in staging | `min_capacity = 1` | Pays for idle once, not twice |
 | VPC endpoints **off** in staging | `enable_vpc_endpoints = false` | See below |
 
-**On VPC endpoints.** They are routinely presented as a saving. They are not,
-unconditionally. Four interface endpoints across two availability zones cost
-roughly **60 USD/month** in hourly charges before any data moves. NAT data
-processing is about 0.045 USD/GB, so the break-even sits near **1.3 TB/month of
-egress**. Staging is nowhere near that and leaves them off; production enables
-them and gains the private path as well as the saving. The S3 *gateway* endpoint
-is free and always enabled, because ECR stores image layers in S3 and without it
-every image pull is billed as NAT traffic.
+**A note on VPC endpoints** — they are routinely presented as an unconditional
+saving. They are not:
+
+- Four interface endpoints across two AZs cost roughly **60 USD/month** in hourly
+  charges, before any data moves
+- NAT data processing is about **0.045 USD/GB**
+- Break-even is therefore around **1.3 TB/month of egress**
+- Staging is nowhere near that, so they are off. Production enables them and gets
+  the private path as a bonus
+- The S3 **gateway** endpoint is free and always on — ECR stores image layers in
+  S3, so without it every image pull is billed as NAT traffic
 
 Staging totals roughly **70–90 USD/month**, of which the largest single item is
 the NAT gateway rather than the compute. `make tf-apply ENV=staging` and
