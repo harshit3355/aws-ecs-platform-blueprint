@@ -207,6 +207,17 @@ variable "access_log_retention_days" {
   default     = 90
 }
 
+variable "access_log_transition_days" {
+  description = "Days before access logs move to Infrequent Access. The transition is skipped entirely when access_log_retention_days is not greater than this, because S3 rejects that combination and IA bills a 30-day minimum per object regardless."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.access_log_transition_days >= 30
+    error_message = "S3 does not permit a transition to STANDARD_IA earlier than 30 days."
+  }
+}
+
 variable "log_bucket_force_destroy" {
   description = "Allow terraform destroy to delete a non-empty access log bucket. Should be false in production."
   type        = bool

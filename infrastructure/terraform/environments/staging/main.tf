@@ -44,7 +44,11 @@ module "data" {
   vpc_id               = module.network.vpc_id
   db_subnet_group_name = module.network.database_subnet_group_name
 
-  instance_class        = "db.t4g.micro"
+  # db.t4g.micro is not offered for PostgreSQL in every region -- ap-south-1
+  # included -- so t4g.small is the smallest Graviton class that is actually
+  # orderable here. The data source in the data module verifies this at plan
+  # time rather than ten minutes into an apply.
+  instance_class        = "db.t4g.small"
   allocated_storage     = 20
   max_allocated_storage = 50
 

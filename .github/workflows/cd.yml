@@ -20,6 +20,11 @@ on:
         description: "Existing image tag to redeploy (leave blank to build from HEAD)"
         required: false
         type: string
+      deploy_production:
+        description: "Also deploy to production (requires approval)"
+        required: false
+        default: false
+        type: boolean
 
 # Never run two deploys at once, and never cancel one half-way: an interrupted
 # ECS rollout leaves a service in a mixed state.
@@ -48,7 +53,10 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          # The build role can push images and nothing else. It is trusted from
+          # the main branch; the deploy role is not, and is reachable only from
+          # a declared GitHub Environment.
+          role-to-assume: ${{ vars.AWS_BUILD_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Log in to ECR
@@ -127,6 +135,20 @@ jobs:
     name: Deploy to production
     runs-on: ubuntu-latest
     needs: [build, deploy-staging]
+
+    # Production is never reached by a push. It requires a deliberate
+    # workflow_dispatch with deploy_production set, which is a human action that
+    # works on every GitHub plan.
+    #
+    # This is belt and braces with the environment below, on purpose: required
+    # reviewers on a PRIVATE repository need GitHub Pro, Team or Enterprise. On
+    # a free plan the environment declaration alone provides no gate at all, and
+    # a production deploy would proceed unattended. This condition is the gate
+    # that always holds; the environment protection rule is the one that adds a
+    # named approver once the plan supports it.
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.deploy_production
 
     # ---- THE MANUAL APPROVAL STEP ----
     # Naming an environment that has "Required reviewers" configured suspends

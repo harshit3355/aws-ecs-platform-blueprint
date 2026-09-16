@@ -9,6 +9,22 @@
 # writes the generated value into state in plaintext, which makes the state
 # bucket itself a credential store.
 
+# Fail at plan time if the requested instance class, engine version and storage
+# type are not actually orderable in this region.
+#
+# Without this the failure surfaces about ten minutes into an apply, as
+# "InsufficientDBInstanceCapacity: no Availability Zones with sufficient
+# capacity" -- which reads as a transient regional shortage and sends you off to
+# retry later. It is usually not transient: db.t4g.micro, for example, is not
+# offered for PostgreSQL in ap-south-1 at all. This data source turns a
+# misleading runtime error into an accurate one before anything is created.
+data "aws_rds_orderable_db_instance" "selected" {
+  engine         = "postgres"
+  engine_version = var.engine_version
+  instance_class = var.instance_class
+  storage_type   = "gp3"
+}
+
 resource "aws_security_group" "db" {
   name_prefix = "${var.name}-rds-"
   description = "PostgreSQL access for ${var.name}"
@@ -41,7 +57,7 @@ module "db" {
   engine_version       = var.engine_version
   family               = var.parameter_group_family
   major_engine_version = var.major_engine_version
-  instance_class       = var.instance_class
+  instance_class       = data.aws_rds_orderable_db_instance.selected.instance_class
 
   # gp3 gives a baseline 3000 IOPS at any size, so a small volume is not also a
   # slow volume the way it was on gp2.

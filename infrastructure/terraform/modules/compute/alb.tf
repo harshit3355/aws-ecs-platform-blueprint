@@ -45,9 +45,19 @@ resource "aws_s3_bucket_lifecycle_configuration" "alb_logs" {
 
     filter {}
 
-    transition {
-      days          = 30
-      storage_class = "STANDARD_IA"
+    # S3 rejects any configuration whose expiration is not strictly greater than
+    # its transition, so the transition is omitted when retention is at or below
+    # the transition threshold. That is also the economically correct choice:
+    # Infrequent Access bills a 30-day minimum duration per object, so moving an
+    # object to IA and deleting it days later costs more than leaving it in
+    # Standard.
+    dynamic "transition" {
+      for_each = var.access_log_retention_days > var.access_log_transition_days ? [1] : []
+
+      content {
+        days          = var.access_log_transition_days
+        storage_class = "STANDARD_IA"
+      }
     }
 
     expiration {
