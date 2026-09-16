@@ -52,9 +52,9 @@ ENV APP_VERSION=${APP_VERSION} \
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
-    && rm -rf /usr/local/lib/python*/site-packages/setuptools* \
-               /usr/local/lib/python*/site-packages/pkg_resources* \
-               /usr/local/lib/python*/site-packages/pip* \
+    && find /usr/local -depth \
+         \( -name "setuptools*" -o -name "pkg_resources*" -o -name "pip*" \) \
+         -exec rm -rf {} + \
     && groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
 
