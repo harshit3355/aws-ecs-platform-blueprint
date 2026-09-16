@@ -12,6 +12,15 @@ obvious from the symptom.
 
 ## 1. The test suite hung forever instead of failing
 
+
+The entries fall into two groups. Entries 1 to 8 were found while building the
+platform. Entries 9 to 22 were found the first time it was applied to a real AWS
+account and the pipeline was run against a real GitHub runner -- every one of
+them passed `terraform validate`, `terraform fmt`, `tflint`, Checkov, `ruff` and
+the local test suite first. That gap, between "the configuration is valid" and
+"the thing actually runs", is where all of them lived.
+
+---
 **Symptom.** The first `pytest` run produced no output at all and was still
 running after three minutes. Not a slow test -- zero output, including the
 header pytest normally prints immediately.
@@ -223,3 +232,352 @@ Each is recorded so the reasoning survives the decision:
 The general rule applied throughout: a complete, plainly-documented gap beats an
 unfinished feature. Everything cut is listed in the README roadmap with the
 reason, so the next person picks up a decision rather than a mystery.
+
+---
+
+## 9. The S3 lifecycle rule was rejected on apply
+
+**Symptom.** `terraform apply` failed part-way:
+
+```
+api error InvalidArgument: 'Days' in the Expiration action for filter
+'(prefix=)' must be greater than 'Days' in the Transition action
+```
+
+**Diagnosis.** The ALB access-log bucket transitioned objects to Infrequent
+Access at a hardcoded 30 days, while expiration came from
+`access_log_retention_days`. Staging sets that to 30. S3 requires expiration to
+be *strictly* greater than transition, so staging was unbuildable.
+
+Production sets 365 and was fine, which is exactly how a defect like this
+survives review: the environment nobody plans carefully is the one that breaks.
+
+**Resolution.** A `dynamic "transition"` block that is omitted when retention is
+not greater than the transition threshold, plus a variable with a `validation`
+enforcing S3's 30-day floor. The economics agree with the constraint: IA bills a
+30-day minimum per object, so transitioning days before deletion costs more than
+staying in Standard.
+
+---
+
+## 10. An instance class that does not exist, reported as a capacity shortage
+
+**Symptom.** Ten minutes into the apply:
+
+```
+InsufficientDBInstanceCapacity: You can't create a db.t4g.micro database
+instance because there are no Availability Zones with sufficient capacity
+```
+
+**Diagnosis.** That message describes a transient regional shortage, and the
+obvious response is to wait and retry. It is not transient:
+
+```
+aws rds describe-orderable-db-instance-options \
+  --engine postgres --engine-version 18.6 --db-instance-class db.t4g.micro
+```
+
+returns **zero** results in `ap-south-1`, and the same for 17.11 and 16.15.
+`db.t4g.micro` is simply not offered for PostgreSQL in this region. The smallest
+orderable Graviton class is `db.t4g.small`.
+
+**Resolution.** Changing the value would have fixed the symptom and left the
+trap. The module now asks AWS at plan time:
+
+```hcl
+data "aws_rds_orderable_db_instance" "selected" {
+  engine         = "postgres"
+  engine_version = var.engine_version
+  instance_class = var.instance_class
+  storage_type   = "gp3"
+}
+```
+
+Its output feeds the instance class, so the dependency is real rather than
+decorative. An unavailable combination now fails during `plan` with an accurate
+message instead of ten minutes into an apply with a misleading one.
+
+---
+
+## 11. The default image tag could never exist
+
+**Symptom.** The service came up and immediately failed:
+
+```
+CannotPullContainerError: ...meridian-staging:latest: not found
+```
+
+**Diagnosis.** `image_tag` defaulted to `latest`, but the pipeline only ever
+pushes `sha-<commit>`, and the ECR repository is `IMMUTABLE`. Nothing would ever
+create that tag. Every first apply therefore produced a service that could not
+start.
+
+**Resolution.** The bootstrapping order is now explicit: infrastructure is
+applied, the pipeline publishes an image, and only then can a task run. The
+deployment circuit breaker means the failed rollout reverts rather than hanging.
+
+---
+
+## 12. The manual approval gate did nothing
+
+**Symptom.** Setting a required reviewer on the `production` environment
+returned HTTP 422:
+
+```
+Failed to create the environment protection rule. Please ensure the billing
+plan supports the required reviewers protection rule.
+```
+
+**Diagnosis.** Environment protection rules are free on **public** repositories.
+On a **private** repository they require GitHub Pro, Team or Enterprise. This
+repository is private on a free plan, so `environment: production` in the
+workflow was decorative: the job would have run unattended.
+
+This is the most consequential entry in this log. A manual approval before
+production is a core requirement, the workflow appeared to implement it, and
+nothing in the repository could have revealed that it did not.
+
+**Resolution.** Production now additionally requires an explicit
+`workflow_dispatch` input, which is a human action that works on every plan. The
+`environment:` declaration stays, so a named approver is added automatically if
+the repository becomes public or the plan changes. Belt and braces, because only
+one of them holds today.
+
+---
+
+## 13. A test that asserted on a default while reading the environment
+
+**Symptom.** `test_tls_is_requested_by_default` passed locally and failed in CI:
+
+```
+AssertionError: assert 'disable' == 'require'
+```
+
+**Diagnosis.** The test asserted that `db_sslmode` defaults to `require`. CI
+exports `DB_SSLMODE=disable` for its throwaway PostgreSQL, which has no TLS, and
+`pydantic-settings` reads the environment. The test was reading ambient
+configuration and calling it a default.
+
+**Resolution.** `monkeypatch.delenv("DB_SSLMODE", raising=False)` first. A test
+that reads its environment is not testing a default, and the only reason it ever
+passed was that the local machine happened not to set the variable.
+
+---
+
+## 14. The image could never build
+
+**Symptom.** `pip install` exited 2 on every build:
+
+```
+--require-hashes option does not take a value
+```
+
+**Diagnosis.** The Dockerfile passed `--require-hashes=false`. It is a flag, not
+a valued option. It was also pointless, since hash checking is off by default --
+written to look deliberate, achieving nothing, and breaking the build.
+
+**Resolution.** Removed.
+
+---
+
+## 15. Five classes of infrastructure misconfiguration
+
+**Symptom.** Trivy's filesystem scan failed the build with HIGH and CRITICAL
+findings across the load balancer, the task security group, the S3 buckets and
+the SNS topic.
+
+**Diagnosis and resolution.** Split into two groups.
+
+*Fixed:* the SNS topic was unencrypted. Alarm payloads carry resource
+identifiers and fragments of application error text, and the AWS-managed key
+costs nothing.
+
+*Accepted, with reasons:* the load balancer is public because it is a public web
+service; the HTTP listener forwards directly only where no certificate exists;
+task egress is unrestricted until VPC endpoints and prefix lists land; and ALB
+access-log delivery supports SSE-S3 only, so a customer-managed key would
+silently stop log delivery rather than fail.
+
+Inline `trivy:ignore` comments were tried first and are not sufficient: several
+findings are raised against `terraform-aws-modules` source downloaded into
+`.terraform/`, which is not ours to annotate. Each acceptance now lives in
+`.trivyignore` with a justification and, where temporary, an expiry date.
+
+The alternative was `soft_fail` or a lower severity threshold. Both would have
+kept the build green and turned the scanner into something nobody reads.
+
+---
+
+## 16. actionlint found something locally impossible to find
+
+**Symptom.** `actionlint` passed on the development machine and failed in CI:
+
+```
+shellcheck reported issue in this script: SC2034:warning: i appears unused
+```
+
+**Diagnosis.** actionlint shells out to `shellcheck` for `run:` blocks *when
+shellcheck is installed*. GitHub runners have it; this machine does not. The
+same binary and version therefore performs a different set of checks depending
+on where it runs.
+
+**Resolution.** Fixed the unused loop variables. Worth recording because "it
+passes locally" was true and meaningless -- a local check that silently performs
+fewer checks than CI is worse than no local check, because it creates false
+confidence.
+
+---
+
+## 17. Coverage measured a directory that no longer existed
+
+**Symptom.** Every CI run printed `CovReportWarning: Failed to generate report:
+No data to report` and passed anyway.
+
+**Diagnosis.** `--cov=app` survived the move of the service to `services/api`.
+Coverage was measuring an empty path, reporting nothing, and failing nothing.
+
+**Resolution.** Corrected the path. The real lesson is that a check which cannot
+fail is not a check; this one had been decorative since the restructure.
+
+---
+
+## 18. An OIDC trust policy that could never match
+
+**Symptom.** Every attempt to assume the deploy role failed, through twelve
+built-in retries and a full re-run:
+
+```
+Could not assume role with OIDC: Not authorized to perform
+sts:AssumeRoleWithWebIdentity
+```
+
+The role ARN was right, the audience condition was right, the workflow had
+`id-token: write`, and the trust policy read correctly on inspection.
+
+**Diagnosis.** The subject claim was not what every guide says it is. Asking
+GitHub directly:
+
+```
+$ gh api repos/OWNER/REPO/actions/oidc/customization/sub
+{"use_default":true,"use_immutable_subject":true,
+ "sub_claim_prefix":"repo:harshit3355@96806109/aws-ecs-platform-blueprint@1368873348"}
+```
+
+GitHub has rolled out **immutable subject claims**, which embed the numeric
+owner and repository IDs rather than their names:
+
+```
+repo:owner@96806109/name@1368873348:ref:refs/heads/main
+```
+
+The trust policy contained the classic `repo:owner/name:ref:refs/heads/main`
+form, which now matches nothing. The change is a genuine security improvement --
+renaming an account can no longer silently transfer trust to whoever claims the
+old name -- but it invalidates every OIDC example written before the rollout.
+
+What made it expensive was the error message. "Not authorized" reads as a
+permissions problem, so the search went to policies, audiences and propagation
+delay before reaching the string itself.
+
+**Resolution.** The prefix is an explicit variable rather than something
+assembled from the repository name, with the command to read the real value in
+its description. Assembling it from the name produces a policy that silently
+never matches.
+
+---
+
+## 19. Twelve fixable CVEs frozen into a pinned base image
+
+**Symptom.** The image scan failed with 12 HIGH and CRITICAL vulnerabilities in
+Debian packages, all with fixes available.
+
+**Diagnosis.** Pinning the base image by digest fixes the starting point and
+also freezes whatever CVEs that layer shipped with. ADR 0008 predicted this in
+writing: *"Updates do not arrive on their own. Without automation the pins go
+stale, which trades a supply-chain risk for a patching risk."* That is precisely
+what happened, and faster than expected.
+
+**Resolution.** The runtime stage applies OS security updates at build time.
+This trades bit-identical rebuilds for patched ones, which is the right way
+round: the alternative is a perfectly reproducible image full of known, fixed,
+unpatched vulnerabilities. The scan runs after the upgrade, so a regression
+still fails the build.
+
+The proper fix is automated dependency updates raising reviewable pull requests.
+It is the second item on the roadmap for this reason.
+
+---
+
+## 20. A vulnerability that moved when looked at
+
+**Symptom.** After pinning `setuptools==84.0.0`, the scanner still reported
+`setuptools 70.3.0`.
+
+**Diagnosis.** The contradiction was the clue: the reported version was not the
+pinned version, so the finding was not in the place being pinned. The
+virtualenv at `/opt/venv` correctly contained 84.0.0. The copy being reported
+was the *interpreter's own* `site-packages`, shipped inside the base image,
+which `requirements.txt` has no influence over whatsoever.
+
+More pinning would never have fixed it. The application runs entirely from the
+virtualenv and never touches system `site-packages`.
+
+**Resolution, and an honest limit.** The system build toolchain is removed from
+the runtime image -- `pip uninstall` did not remove it, a path glob did not match
+it, and a filesystem search across `/usr/local` did not clear the finding either.
+Removing a package installer from a running container is worth doing on its own
+merits, so that change stays.
+
+After three attempts the file still could not be located without a container
+runtime to inspect the image interactively, and this machine has none. The
+finding is therefore accepted in `.trivyignore` with its reachability written
+out: the vulnerable code path is `PackageIndex`, which runs only when setuptools
+downloads packages from an index. The container starts uvicorn from the
+virtualenv, installs nothing, and runs non-root on a read-only root filesystem.
+There is no path from a request to that code.
+
+That is a reasoned acceptance, not a silenced alarm, and the distinction is the
+point: the entry carries an expiry date and a note to delete rather than renew
+it once the base image ships a patched version. A VEX statement asserting
+`not_affected` with justification `vulnerable_code_not_in_execute_path` is the
+correct long-term fix and is on the roadmap.
+
+---
+
+## 21. An unrelated role in the account was assumable by anyone
+
+**Symptom.** Found while checking whether an OIDC provider already existed.
+
+**Diagnosis.** A pre-existing role, `github-actions-terraform-apply`, carried
+`AdministratorAccess` with this trust condition:
+
+```json
+"StringLike": { "token.actions.githubusercontent.com:sub": "repo:ciATH*" }
+```
+
+The `*` matches everything after `ciATH`, including the `/` separating owner
+from repository. GitHub account names are global and free to register, so anyone
+able to register an account beginning with those characters could assume an
+AdministratorAccess role in the account.
+
+**Resolution.** Reported, not changed -- it belongs to another project and was
+explicitly out of scope. Recorded here because it is the strongest possible
+argument for the rule applied throughout this repository: **`StringEquals` on
+exact subjects, never `StringLike` on a prefix.** A wildcard in a trust policy
+is not a convenience; it is the whole boundary, removed.
+
+---
+
+## 22. One OIDC provider per account
+
+**Symptom.** The first draft created `aws_iam_openid_connect_provider` as a
+resource. The account already had one.
+
+**Diagnosis.** The GitHub OIDC provider is an account-level singleton: there can
+be exactly one per issuer. Applying would have failed with
+`EntityAlreadyExists`, and the alternative -- importing it -- would have put a
+shared account-level resource under this project's state, so destroying this
+project would break every other consumer.
+
+**Resolution.** A `data` source, never a `resource`. The configuration composes
+with whatever already exists rather than claiming ownership of it.
