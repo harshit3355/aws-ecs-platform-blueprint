@@ -7,3 +7,11 @@ sqlalchemy==2.0.52
 psycopg[binary]==3.3.5
 pydantic-settings==2.15.0
 prometheus-fastapi-instrumentator==8.1.0
+
+# Build toolchain. Not imported by the application, but `python -m venv`
+# installs both into every environment, and the versions bundled with the
+# pinned base image carry known vulnerabilities (setuptools CVE-2025-47273).
+# Pinning them makes the scanner's finding actionable instead of a permanent
+# exception.
+setuptools==84.0.0
+pip==26.2.1
