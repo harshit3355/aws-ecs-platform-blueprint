@@ -344,6 +344,20 @@ No Secrets Manager entries lingered: RDS-managed secrets are removed with the
 instance rather than entering a recovery window, which is one more advantage of
 letting RDS own the credential.
 
+## Deregister orphaned task definitions
+
+`terraform destroy` removes the revision Terraform created. Every revision the
+pipeline registered is outside that state and outlives the cluster:
+
+```bash
+for arn in $(aws ecs list-task-definitions --status ACTIVE --query "taskDefinitionArns[]" --output text); do
+  aws ecs deregister-task-definition --task-definition "$arn" > /dev/null
+done
+```
+
+They cost nothing, so this is tidiness rather than spend -- but a service
+deploying often accumulates thousands, and they never disappear on their own.
+
 ## Confirm the spend has stopped
 
 The expensive resources are NAT gateways, RDS instances and load balancers, in

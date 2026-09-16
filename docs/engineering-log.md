@@ -758,3 +758,34 @@ aws cloudwatch describe-alarms --alarm-name-prefix <prefix> \
 Any alarm whose reason mentions missing datapoints is not monitoring anything.
 A permanently-firing alarm and a never-firing one are the same defect wearing
 different clothes, and the noisy one is the lucky case.
+
+---
+
+## 29. Task definitions that nothing ever cleans up
+
+**Symptom.** After destroying every environment, ten ECS task definition
+revisions were still registered and ACTIVE.
+
+**Diagnosis.** The deploy action registers a new revision on every deploy, which
+is how it preserves everything Terraform configured while changing only the
+image. Terraform destroys the one revision *it* created. Nothing owns the rest.
+
+They cost nothing and appear nowhere in a cost report, which is why the gap is
+easy to miss. It only becomes visible at volume: a service deploying ten times a
+day accumulates several thousand ACTIVE revisions a year, and the ECS console
+becomes unusable long before anything breaks.
+
+**Resolution.** Documented in the teardown runbook, with the command to
+deregister them.
+
+The proper fix is retention rather than deletion -- keep the most recent N
+revisions and deregister older ones -- and it deliberately did **not** go into
+the deploy action as part of this cleanup. Old revisions are rollback targets,
+and a deregistration step written in a hurry is a good way to discover that
+during an incident. It belongs on the roadmap beside the other retention
+settings, not bolted on at teardown time.
+
+**Worth noting where this sits.** Terraform tracks what it created. Anything a
+pipeline creates outside that state is nobody's responsibility unless somebody
+makes it so. Task definitions are the mild version; the same gap around
+snapshots, log groups or images is the version that shows up on the bill.
