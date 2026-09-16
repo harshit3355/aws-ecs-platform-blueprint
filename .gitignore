@@ -41,3 +41,9 @@ Thumbs.db
 
 # Local tooling
 /tools/
+
+# Submission artefacts, not project artefacts.
+# The engineering log is the source of truth and stays in Markdown so it can
+# be reviewed in a pull request; the rendered copy is an email attachment.
+docs/Challenges-and-Resolutions.docx
+docs/LOOM-SCRIPT.md
