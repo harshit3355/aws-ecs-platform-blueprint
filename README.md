@@ -127,6 +127,13 @@ starts one. In CI they are not permitted to skip — the pipeline fails the buil
 if they do, because a broken service container would otherwise produce a green
 result.
 
+### Validate a running deployment
+
+[docs/VALIDATION.md](docs/VALIDATION.md) maps every requirement in the brief to
+a command you can run against the live environment — including the one worth
+running first: `terraform state pull | grep -ci password` returns `0`, because
+the database credential never passes through Terraform.
+
 ### Provision an environment
 
 Full step-by-step, including teardown and its sharp edges:
@@ -405,6 +412,7 @@ expected commit SHA, which is a stronger check than a local build.
 
 ## Documentation
 
+- [Validating against the brief](docs/VALIDATION.md) — every requirement paired with the command that proves it
 - [Provisioning and teardown](docs/runbooks/provisioning.md) — from an empty account to a running service, and back
 - [Architecture](docs/architecture.md) — request path, security-group chain, deployment sequence, trade-offs
 - [Decision records](docs/adr/README.md) — why each non-obvious choice was made, and what it cost
