@@ -14,6 +14,26 @@ variable "github_repository" {
   }
 }
 
+variable "github_subject_prefix" {
+  description = <<-EOT
+    The literal prefix of the OIDC subject claim, without the trailing
+    ":ref:..." or ":environment:..." segment.
+
+    Leave null for the classic form, repo:<owner>/<name>. Set it when the
+    repository uses GitHub's immutable subject claims, where the prefix embeds
+    the numeric owner and repository IDs:
+
+      repo:<owner>@<owner-id>/<name>@<repo-id>
+
+    Read the actual value rather than assuming, because guessing it produces a
+    trust policy that silently never matches:
+
+      gh api repos/<owner>/<name>/actions/oidc/customization/sub
+  EOT
+  type        = string
+  default     = null
+}
+
 variable "resource_name_prefix" {
   description = "Prefix the platform's resources share. Used to scope every ARN these roles can act on."
   type        = string

@@ -99,6 +99,7 @@ jobs:
           image-ref: ${{ steps.meta.outputs.image_uri }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          trivyignores: .trivyignore
           exit-code: "1"
 
       - name: Push image

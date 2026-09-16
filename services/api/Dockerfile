@@ -28,8 +28,22 @@ ENV APP_VERSION=${APP_VERSION} \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# Non-root, no shell, no home. Nothing in the image needs to write to disk.
-RUN groupadd --system --gid 10001 app \
+# Apply OS security updates, then create the unprivileged user.
+#
+# The base image is pinned by digest, which fixes the starting point but also
+# freezes whatever CVEs that layer shipped with. Scanning this image found 12
+# fixable HIGH/CRITICAL vulnerabilities in Debian packages the base has not been
+# rebuilt to include. Upgrading here applies those fixes at build time.
+#
+# The trade-off is deliberate: two builds from the same digest can now differ in
+# their OS package versions, so the layer is reproducible but not bit-identical
+# over time. That is the right way round -- the alternative is a bit-identical
+# image with known, fixed, unpatched vulnerabilities. The image is scanned after
+# this step, so a regression still fails the build.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
 
 COPY --from=build /opt/venv /opt/venv

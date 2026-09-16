@@ -27,11 +27,24 @@ data "aws_iam_openid_connect_provider" "github" {
 locals {
   issuer = "token.actions.githubusercontent.com"
 
-  build_subjects = ["repo:${var.github_repository}:ref:refs/heads/main"]
+  # GitHub is rolling out immutable subject claims, where the subject embeds the
+  # numeric owner and repository IDs rather than their names:
+  #
+  #   repo:owner@1234/name@5678:ref:refs/heads/main
+  #
+  # That is strictly better -- renaming an account cannot silently transfer
+  # trust to whoever claims the old name -- but it means the repo:owner/name
+  # form used by every guide written before the rollout produces a trust policy
+  # that never matches. The failure is "Not authorized to perform
+  # sts:AssumeRoleWithWebIdentity", which reads like a permissions problem
+  # rather than a string mismatch.
+  subject_prefix = coalesce(var.github_subject_prefix, "repo:${var.github_repository}")
+
+  build_subjects = ["${local.subject_prefix}:ref:refs/heads/main"]
 
   deploy_subjects = [
     for env in var.deploy_environments :
-    "repo:${var.github_repository}:environment:${env}"
+    "${local.subject_prefix}:environment:${env}"
   ]
 }
 

@@ -97,8 +97,7 @@ resource "aws_vpc_security_group_ingress_rule" "tasks_from_alb" {
 # Egress is open because the tasks must reach ECR, CloudWatch Logs, Secrets
 # Manager and RDS. Narrowing this to prefix lists is possible and is listed in
 # the README as a follow-up; it is not free, because ECR endpoints move.
-# trivy:ignore:AWS-0104
-# Accepted: unrestricted egress. Fargate tasks must reach ECR, CloudWatch Logs,
+# Accepted risk (see .trivyignore): unrestricted egress. Fargate tasks must reach ECR, CloudWatch Logs,
 # Secrets Manager and RDS, and the ECR/S3 endpoints behind those calls do not
 # have stable addresses. The alternative is VPC endpoints plus prefix lists,
 # which is on the roadmap and is what closes this properly. Ingress is already

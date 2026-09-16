@@ -1,0 +1,46 @@
+# Accepted Trivy findings.
+#
+# Inline "trivy:ignore" comments were tried first and are not sufficient here:
+# several of these are raised against terraform-aws-modules source downloaded
+# into .terraform/, which is not ours to annotate. A central file also keeps
+# every accepted risk in one reviewable place with a reason and an expiry, so
+# an exception has to be re-argued rather than quietly inherited forever.
+#
+# Rule: nothing goes in this file without a justification and a date.
+
+# Load balancer is internet-facing.
+# This is a public web service; an internet-facing load balancer is the
+# requirement. Reviewed 2026-09-16.
+AVD-AWS-0053
+
+# HTTP listener does not redirect to HTTPS.
+# Conditional, not absolute: port 80 forwards directly only when no ACM
+# certificate is supplied, which is the case in environments with no registered
+# domain. Set certificate_arn and this becomes a 301 to a TLS 1.3 listener.
+# See docs/adr/0007-tls-termination.md. Reviewed 2026-09-16.
+exp:2026-12-31
+AVD-AWS-0054
+
+# Unrestricted egress from the ECS task security group.
+# Tasks must reach ECR, CloudWatch Logs, Secrets Manager and RDS, and the
+# service endpoints behind those have no stable address range. Ingress is
+# already restricted to the load balancer alone, and the subnet has no inbound
+# path from the internet. Closed properly by VPC endpoints plus prefix lists,
+# which is on the roadmap. Reviewed 2026-09-16.
+exp:2026-12-31
+AVD-AWS-0104
+
+# S3 buckets use SSE-S3 rather than a customer-managed key.
+# For the ALB access-log bucket this is not fixable: log delivery supports
+# SSE-S3 only, and configuring SSE-KMS silently stops delivery rather than
+# failing. For the state bucket it is a deliberate deferral -- a CMK adds a key
+# whose deletion makes every state file unreadable, which is a worse failure
+# than the one it prevents until key administration is owned. Reviewed
+# 2026-09-16.
+AVD-AWS-0132
+
+# SNS topic uses the AWS-managed key rather than a customer-managed key.
+# The topic is encrypted; the scanner wants a CMK specifically. Same reasoning
+# as AVD-AWS-0132: a CMK here buys key-policy control we have no requirement
+# for yet, at the cost of another key to administer. Reviewed 2026-09-16.
+AVD-AWS-0136
