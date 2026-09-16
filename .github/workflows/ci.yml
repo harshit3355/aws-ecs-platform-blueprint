@@ -184,25 +184,56 @@ jobs:
           exit-code: "1"
 
       - name: Smoke test the built image
-        # Proves the image actually starts and serves /health before it is ever
-        # considered for a deploy. A scan says the image is safe; this says it works.
+        # A scan says the image is safe; this says it works. The two are not the
+        # same claim, and only this one would have caught a broken entrypoint.
+        #
+        # The container gets a real database. An earlier version of this step
+        # started it with DB_HOST=127.0.0.1 and nothing listening, on the
+        # reasoning that /health does not query the database. That reasoning was
+        # wrong: startup is deliberately fail-fast, so schema initialisation
+        # exhausts its retries, uvicorn exits, and /health is never served at
+        # all. The service genuinely requires a database to start, so the smoke
+        # test has to provide one.
         run: |
-          docker run -d --name smoke -p 8000:8000 \
-            -e DB_HOST=127.0.0.1 -e APP_VERSION=${{ github.sha }} \
-            meridian-api:ci
+          set -euo pipefail
+          docker network create smoke-net
+
+          docker run -d --name smoke-db --network smoke-net             -e POSTGRES_USER=appuser             -e POSTGRES_PASSWORD=appsecret             -e POSTGRES_DB=appdb             postgres:18.6-trixie
+
+          echo "waiting for postgres"
           for _ in $(seq 1 30); do
-            if curl -fsS http://localhost:8000/health > /tmp/health.json; then
-              cat /tmp/health.json
-              grep -q "${{ github.sha }}" /tmp/health.json
-              docker rm -f smoke
-              exit 0
+            if docker exec smoke-db pg_isready -U appuser -d appdb > /dev/null 2>&1; then
+              break
             fi
             sleep 2
           done
-          echo "::error::Image failed to serve /health within 60s"
-          docker logs smoke
-          docker rm -f smoke
-          exit 1
+
+          docker run -d --name smoke --network smoke-net -p 8000:8000             -e DB_HOST=smoke-db             -e DB_SSLMODE=disable             -e APP_VERSION="$GITHUB_SHA"             meridian-api:ci
+
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health > /tmp/health.json; then
+              cat /tmp/health.json
+              # The build identifier must match, not merely be present: a stale
+              # image that still serves /health would otherwise pass.
+              grep -q "$GITHUB_SHA" /tmp/health.json
+              # And the database leg must work, which is the half the previous
+              # version of this step could not check.
+              curl -fsS http://localhost:8000/readyz
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::Image failed to serve /health within 60s"
+            docker logs smoke
+          fi
+
+          docker rm -f smoke smoke-db > /dev/null
+          docker network rm smoke-net > /dev/null
+          [ "$ok" -eq 1 ]
 
   workflow-lint:
     name: Workflow lint

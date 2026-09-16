@@ -581,3 +581,92 @@ project would break every other consumer.
 
 **Resolution.** A `data` source, never a `resource`. The configuration composes
 with whatever already exists rather than claiming ownership of it.
+
+---
+
+## 23. One registry per environment contradicts promoting one artifact
+
+**Symptom.** Applying production created a second container registry,
+`meridian-prod`, alongside `meridian-staging`. Nothing ever pushed to it.
+
+**Diagnosis.** The compute module created a registry per environment, but the
+pipeline is built on the opposite idea: build an image once and promote that
+same artifact through staging to production. Only one of the two registries
+could ever hold the image being promoted, so the other was dead weight -- and
+worse than dead weight, because an empty `meridian-prod` invites someone to
+"fix" it later by rebuilding for production, which is a different artifact
+however identical the inputs look.
+
+**Resolution.** One registry, moved into the delivery configuration alongside
+the CI roles. It now also outlives environments, so tearing one down no longer
+destroys the images you would roll back to.
+
+---
+
+## 24. The pipeline refilled a registry during its own teardown
+
+**Symptom.** `terraform destroy` failed on a repository emptied minutes earlier:
+
+```
+RepositoryNotEmptyException: repository 'meridian-staging' cannot be deleted
+because it still contains images
+```
+
+**Diagnosis.** Documentation commits pushed to `main` while the teardown was
+running. Those triggered the delivery workflow, which built and pushed a fresh
+image into the repository being destroyed.
+
+**Resolution.** The runbook now disables the workflow before teardown begins.
+
+The general shape is worth naming, because it keeps recurring in this log: the
+steady state was fine and the *transition* was not. Entry 9 was an environment
+whose lifecycle rule only failed at one retention value; entry 11 was the window
+between infrastructure existing and an image existing; this one is the window
+between emptying a registry and deleting it. Configuration review examines
+steady states. Only running the transition finds these.
+
+---
+
+## 25. A smoke test that could never have passed
+
+**Symptom.** CI failed with the container refusing to serve anything:
+
+```
+curl: (7) Failed to connect to localhost port 8000
+Error: Image failed to serve /health within 60s
+```
+
+**Diagnosis.** The smoke test started the image with `DB_HOST=127.0.0.1` and
+nothing listening, on the reasoning that `/health` deliberately does not query
+the database. The reasoning was wrong in a way worth recording: startup is
+fail-fast by design, so schema initialisation exhausted its retries, uvicorn
+exited, and `/health` was never served at all. The endpoint not *needing* a
+database does not mean the process can *start* without one.
+
+It had also never actually run before. Earlier builds failed at the image scan,
+one step before it, so the step had been present and unexercised for days --
+green-looking because it never got a chance to be red.
+
+**Resolution.** The smoke test now runs a real PostgreSQL container on a shared
+Docker network, and additionally asserts `/readyz`, which exercises the database
+leg the previous version could not reach.
+
+---
+
+## 26. An orphaned .pth file left a traceback in every log line
+
+**Symptom.** Every container start printed:
+
+```
+Error processing line 1 of /opt/venv/.../distutils-precedence.pth:
+  ModuleNotFoundError: No module named '_distutils_hack'
+```
+
+**Diagnosis.** Removing setuptools from the virtualenv (entry 20) deleted
+`_distutils_hack` but left `distutils-precedence.pth`, which imports it at
+every interpreter start. Harmless -- Python reports it and continues -- but it
+interleaved a traceback with the structured JSON logs, which is precisely the
+noise the structured logging exists to avoid.
+
+**Resolution.** Remove the `.pth` alongside the module. Deleting a package means
+deleting what registers it, not only its code.

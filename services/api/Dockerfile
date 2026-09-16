@@ -30,7 +30,8 @@ RUN python -m venv /opt/venv \
     && find /opt/venv -depth \
          \( -name "pip" -o -name "pip-*" -o -name "pip.*" \
             -o -name "setuptools" -o -name "setuptools-*" \
-            -o -name "pkg_resources" -o -name "_distutils_hack*" \) \
+            -o -name "pkg_resources" -o -name "_distutils_hack*" \
+            -o -name "distutils-precedence.pth" \) \
          -exec rm -rf {} +
 
 # ---------- runtime ----------
