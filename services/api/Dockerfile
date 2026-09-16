@@ -29,7 +29,8 @@ ENV APP_VERSION=${APP_VERSION} \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# Apply OS security updates, then create the unprivileged user.
+# Apply OS security updates, strip the system build toolchain, then create the
+# unprivileged user.
 #
 # The base image is pinned by digest, which fixes the starting point but also
 # freezes whatever CVEs that layer shipped with. Scanning this image found 12
@@ -41,9 +42,17 @@ ENV APP_VERSION=${APP_VERSION} \
 # over time. That is the right way round -- the alternative is a bit-identical
 # image with known, fixed, unpatched vulnerabilities. The image is scanned after
 # this step, so a regression still fails the build.
+#
+# System pip and setuptools are removed as well. The application runs from
+# /opt/venv and never uses the interpreter's own site-packages, but the copy of
+# setuptools the base image ships carries CVE-2025-47273 and is what the scanner
+# reports -- pinning setuptools in requirements.txt fixes the venv and leaves
+# this one untouched. Removing it also takes a package installer out of a
+# running container, which is worth doing on its own.
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
+    && python -m pip uninstall -y setuptools pip \
     && groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
 
