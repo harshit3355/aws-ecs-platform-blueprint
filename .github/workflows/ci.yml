@@ -92,12 +92,12 @@ jobs:
         run: pip install -r services/api/requirements-dev.txt
 
       - name: Unit tests
-        run: pytest -v -m "not integration" --cov=app --cov-report=term-missing
+        run: pytest -v -m "not integration" --cov=services/api --cov-report=term-missing
 
       - name: Integration tests
         # No -m filter and no skips: if the database is unreachable here that is
         # a CI failure, not a reason to quietly pass.
-        run: pytest -v -m integration --cov=app --cov-append --cov-report=xml
+        run: pytest -v -m integration --cov=services/api --cov-append --cov-report=xml
 
       - name: Fail if integration tests were skipped
         # The db_client fixture skips when PostgreSQL is unreachable, which is
@@ -189,7 +189,7 @@ jobs:
           docker run -d --name smoke -p 8000:8000 \
             -e DB_HOST=127.0.0.1 -e APP_VERSION=${{ github.sha }} \
             meridian-api:ci
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl -fsS http://localhost:8000/health > /tmp/health.json; then
               cat /tmp/health.json
               grep -q "${{ github.sha }}" /tmp/health.json

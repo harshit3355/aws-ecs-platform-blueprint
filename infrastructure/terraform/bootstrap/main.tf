@@ -25,6 +25,12 @@ resource "aws_s3_bucket_versioning" "state" {
   }
 }
 
+# trivy:ignore:AWS-0132
+# Accepted for now: SSE-S3 rather than a customer-managed key. A CMK would add
+# per-request KMS charges and, more importantly, a key whose deletion makes
+# every state file unreadable -- a failure mode worse than the one it prevents,
+# until key administration is properly owned. Revisit when the account has a
+# managed KMS story.
 resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
   bucket = aws_s3_bucket.state.id
 

@@ -13,6 +13,13 @@ data "aws_region" "current" {}
 
 resource "aws_sns_topic" "alerts" {
   name = "${var.name}-alerts"
+
+  # Alarm notifications carry resource identifiers and, in the log-derived
+  # alarms, fragments of application error text. The AWS-managed key costs
+  # nothing and removes the topic from the set of places that data sits in
+  # plaintext.
+  kms_master_key_id = "alias/aws/sns"
+
   tags = var.tags
 }
 

@@ -17,7 +17,7 @@ COPY requirements.txt .
 # Dependencies go into their own virtualenv so the runtime stage can copy exactly
 # one directory and inherit none of pip, the wheel cache, or the build toolchain.
 RUN python -m venv /opt/venv \
-    && /opt/venv/bin/pip install --require-hashes=false -r requirements.txt
+    && /opt/venv/bin/pip install -r requirements.txt
 
 # ---------- runtime ----------
 FROM ${PYTHON_IMAGE} AS runtime

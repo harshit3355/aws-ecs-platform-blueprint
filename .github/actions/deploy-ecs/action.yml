@@ -106,7 +106,7 @@ runs:
 
         # "The rollout finished" and "the new code is serving traffic" are not
         # the same claim. This checks the second one.
-        for attempt in $(seq 1 20); do
+        for _ in $(seq 1 20); do
           if body=$(curl -fsS --max-time 10 "${{ inputs.health-url }}"); then
             echo "$body"
             if echo "$body" | jq -e --arg v "${{ inputs.app-version }}" '.version == $v' > /dev/null; then

@@ -24,6 +24,10 @@ resource "aws_s3_bucket_public_access_block" "alb_logs" {
   restrict_public_buckets = true
 }
 
+# trivy:ignore:AWS-0132
+# Accepted, and not fixable: ALB access-log delivery supports SSE-S3 only.
+# Configuring SSE-KMS here does not fail loudly -- it silently stops log
+# delivery, which looks exactly like "access logging was never enabled".
 resource "aws_s3_bucket_server_side_encryption_configuration" "alb_logs" {
   bucket = aws_s3_bucket.alb_logs.id
 
@@ -143,6 +147,15 @@ locals {
   } : {}
 }
 
+# trivy:ignore:AWS-0053
+# Accepted: the load balancer is internet-facing because this is a public web
+# service. That is the requirement, not an oversight.
+#
+# trivy:ignore:AWS-0054
+# Accepted conditionally: the HTTP listener forwards directly only when no ACM
+# certificate is supplied, which is the case in environments with no registered
+# domain. Set certificate_arn and port 80 becomes a 301 to a TLS 1.3 listener.
+# See docs/adr/0007-tls-termination.md.
 module "alb" {
   source  = "terraform-aws-modules/alb/aws"
   version = "10.5.1"

@@ -23,9 +23,16 @@ class TestDatabaseUrl:
             "postgresql+psycopg://appuser:simple@db:5432/appdb?sslmode=require"
         )
 
-    def test_tls_is_requested_by_default(self):
+    def test_tls_is_requested_by_default(self, monkeypatch):
         """RDS is configured with rds.force_ssl = 1. Defaulting to libpq's
-        "prefer" would silently allow plaintext wherever a server permits it."""
+        "prefer" would silently allow plaintext wherever a server permits it.
+
+        The environment is cleared first: a test that asserts on a default while
+        reading ambient configuration is not testing the default. CI exports
+        DB_SSLMODE=disable for its throwaway PostgreSQL, and without this the
+        test passes locally and fails there.
+        """
+        monkeypatch.delenv("DB_SSLMODE", raising=False)
         assert Settings().db_sslmode == "require"
         assert "sslmode=require" in Settings().database_url
 
