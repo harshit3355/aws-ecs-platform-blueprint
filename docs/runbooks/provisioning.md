@@ -202,6 +202,19 @@ B=$(aws s3api list-buckets \
 aws s3 rm "s3://$B" --recursive
 ```
 
+### Stop the pipeline before emptying anything
+
+Disable the delivery workflow first:
+
+```bash
+gh workflow disable cd.yml     # re-enable later with: gh workflow enable cd.yml
+```
+
+Without this, any push to `main` -- including a documentation commit -- builds
+and pushes a new image while you are trying to tear the registry down. The
+destroy then fails with `RepositoryNotEmptyException` on a repository you
+emptied minutes earlier, which is a confusing five minutes.
+
 ### ECR images
 
 An ECR repository with images in it also blocks deletion. The Terraform
@@ -315,6 +328,21 @@ aws s3api delete-objects --bucket <bucket> \
   --delete "$(aws s3api list-object-versions --bucket <bucket> \
     --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json)"
 ```
+
+## Observed after a real teardown
+
+Running this end to end on 2026-09-16 left exactly what the table above
+predicts, and nothing else:
+
+| Left behind | Detail |
+|---|---|
+| Final RDS snapshot | `final-meridian-prod-<suffix>`, 50 GB, roughly 2.50 USD/month |
+| CloudWatch log groups | Container Insights performance, and `RDSOSMetrics` |
+| State bucket, CI roles, registry | Intentional -- reprovisioning reuses them |
+
+No Secrets Manager entries lingered: RDS-managed secrets are removed with the
+instance rather than entering a recovery window, which is one more advantage of
+letting RDS own the credential.
 
 ## Confirm the spend has stopped
 
