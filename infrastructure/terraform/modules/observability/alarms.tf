@@ -144,7 +144,18 @@ resource "aws_cloudwatch_metric_alarm" "ecs_running_tasks" {
   alarm_name        = "${var.name}-ecs-no-running-tasks"
   alarm_description = "The service has fewer running tasks than its floor. This is an outage."
 
-  namespace           = "AWS/ECS"
+  # ECS/ContainerInsights, not AWS/ECS. The AWS/ECS namespace publishes only
+  # CPUUtilization, MemoryUtilization and LiveTaskCount; RunningTaskCount comes
+  # from Container Insights. Pointing an alarm at a metric that does not exist
+  # produces no datapoints, and combined with treat_missing_data = "breaching"
+  # below that is a permanently firing alarm -- a false positive that never
+  # clears, which is the fastest way to train everyone to ignore the channel.
+  #
+  # Note the asymmetry: "breaching" turns a wrong metric name into a permanent
+  # page, while "notBreaching" would have hidden it silently and left the real
+  # outage undetected. Neither setting is safe against a typo; only the correct
+  # namespace is.
+  namespace           = "ECS/ContainerInsights"
   metric_name         = "RunningTaskCount"
   statistic           = "Minimum"
   period              = 60

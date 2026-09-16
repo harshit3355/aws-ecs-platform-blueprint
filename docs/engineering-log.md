@@ -708,3 +708,53 @@ It fails *open* in the sense that it is silent: `terraform validate`, `plan` and
 `apply` all succeed, and you find out at push time. Referencing the resource
 directly makes the coupling structural, so the permission cannot drift away
 from the thing it authorises.
+
+---
+
+## 28. An alarm that had never once been true
+
+**Symptom.** With the service verifiably healthy -- `/health` returning 200,
+`/readyz` reaching the database, one task running -- one alarm sat in ALARM:
+
+```
+meridian-staging-ecs-no-running-tasks   ALARM
+"no datapoints were received for 3 periods and 3 missing datapoints
+ were treated as [Breaching]"
+```
+
+**Diagnosis.** `RunningTaskCount` does not exist in the `AWS/ECS` namespace.
+That namespace publishes `CPUUtilization`, `MemoryUtilization` and
+`LiveTaskCount`. `RunningTaskCount` comes from `ECS/ContainerInsights`.
+
+The alarm had therefore never evaluated a real datapoint in its life. It went
+into ALARM shortly after creation and stayed there.
+
+The same repository already had this right in one place and wrong in another:
+the CloudWatch dashboard queries `ECS/ContainerInsights` for exactly this
+metric. Alarm and dashboard disagreed about where the data lives, in adjacent
+files, and nothing flagged it -- CloudWatch accepts any namespace and metric
+name as a string, valid or not.
+
+**Resolution.** Correct the namespace.
+
+**The asymmetry worth understanding.** This alarm sets
+`treat_missing_data = "breaching"`, on the reasoning that a service reporting no
+task count at all is worse news than one reporting zero. That reasoning is
+sound, and it is also what made a typo visible: the alarm screamed continuously
+until someone looked.
+
+Had it been `notBreaching`, the identical mistake would have produced an alarm
+that sat permanently in OK, silent, and would have stayed silent through a real
+outage. That is strictly worse and far harder to notice.
+
+Neither setting makes a wrong metric name safe. What does is checking that an
+alarm has ever evaluated real data:
+
+```bash
+aws cloudwatch describe-alarms --alarm-name-prefix <prefix> \
+  --query "MetricAlarms[?StateReason!=null].{name:AlarmName,reason:StateReason}"
+```
+
+Any alarm whose reason mentions missing datapoints is not monitoring anything.
+A permanently-firing alarm and a never-firing one are the same defect wearing
+different clothes, and the noisy one is the lucky case.
