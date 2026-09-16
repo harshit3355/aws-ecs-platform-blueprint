@@ -209,16 +209,25 @@ resource does not set `force_delete`, deliberately -- deleting the images is how
 you lose the ability to roll back.
 
 ```bash
-aws ecr batch-delete-image --repository-name meridian-staging \
-  --image-ids "$(aws ecr list-images --repository-name meridian-staging \
-                   --query 'imageIds[*]' --output json)"
+IDS=$(aws ecr list-images --repository-name meridian --query "imageIds[*]" --output json)
+aws ecr batch-delete-image --repository-name meridian --image-ids "$IDS"
 ```
+
+The registry is shared and lives in `cicd`, so this is only needed when you tear
+the *registry* down. Destroying an environment no longer touches it, which is
+deliberate: the images you would roll back to should outlive any one
+environment.
 
 ## Destroy an environment
 
+Plan the destroy, then apply that saved plan. Same discipline as an apply: you
+review exactly what is about to happen, and the thing you approved is the thing
+that runs. `destroy -auto-approve` skips that review.
+
 ```bash
 cd infrastructure/terraform/environments/prod
-terraform destroy
+terraform plan -destroy -out=destroy.tfplan
+terraform apply destroy.tfplan
 ```
 
 Roughly 10-15 minutes. RDS is the slow part again.
