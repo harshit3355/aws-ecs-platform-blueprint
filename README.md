@@ -129,6 +129,10 @@ result.
 
 ### Provision an environment
 
+Full step-by-step, including teardown and its sharp edges:
+**[docs/runbooks/provisioning.md](docs/runbooks/provisioning.md)**. The short
+version follows.
+
 ```bash
 # One-time, per account: create the state bucket.
 terraform -chdir=infrastructure/terraform/bootstrap init
@@ -372,8 +376,16 @@ first three is in the linked decision records.
 
 Every check below runs locally with no cloud credentials, via `make verify`.
 
+Everything below was run against a real AWS account and a real GitHub runner,
+not only validated locally.
+
 | Check | Tool | Result |
 |---|---|---|
+| Staging stack applied | Terraform 1.16.2 | 82 resources created |
+| Pipeline end to end | GitHub Actions | build, scan, push, deploy, verify — green |
+| Deployed version | live `/health` | returns the deployed commit SHA |
+| Database connectivity | live `/readyz` | reachable over TLS from a private subnet |
+| Centralized logging | CloudWatch, S3 | app, access, flow, RDS and exec logs all receiving |
 | Unit tests | pytest 9.1.1 | 13 passed |
 | Integration tests | pytest | 6 — skip without PostgreSQL, enforced in CI |
 | Lint and formatting | ruff 0.16.7 | clean |
@@ -393,6 +405,7 @@ expected commit SHA, which is a stronger check than a local build.
 
 ## Documentation
 
+- [Provisioning and teardown](docs/runbooks/provisioning.md) — from an empty account to a running service, and back
 - [Architecture](docs/architecture.md) — request path, security-group chain, deployment sequence, trade-offs
 - [Decision records](docs/adr/README.md) — why each non-obvious choice was made, and what it cost
 - [Engineering log](docs/engineering-log.md) — problems hit while building this, with diagnoses

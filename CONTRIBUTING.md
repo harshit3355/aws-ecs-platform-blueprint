@@ -11,6 +11,11 @@ make verify      # everything CI runs that needs no credentials
 `make help` lists every target. If a check runs in CI but has no target here,
 that is a bug in the `Makefile` -- please fix it in the same pull request.
 
+To stand the infrastructure up yourself, or take it down again, follow
+[docs/runbooks/provisioning.md](docs/runbooks/provisioning.md). Teardown in
+particular has guards that will stop a `terraform destroy` part-way if you have
+not cleared them first.
+
 ## Repository layout
 
 | Path | Owns |
