@@ -23,14 +23,9 @@ output "access_logs_bucket" {
   value       = aws_s3_bucket.alb_logs.id
 }
 
-output "ecr_repository_url" {
-  description = "Repository the CD pipeline pushes to."
-  value       = aws_ecr_repository.app.repository_url
-}
-
-output "ecr_repository_arn" {
-  description = "ECR repository ARN, for scoping the CI deploy role."
-  value       = aws_ecr_repository.app.arn
+output "image_repository_url" {
+  description = "Repository the CD pipeline pushes to. Owned by infrastructure/terraform/cicd, shared by every environment."
+  value       = var.image_repository_url
 }
 
 output "ecs_cluster_name" {

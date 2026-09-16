@@ -115,7 +115,7 @@ resource "aws_vpc_security_group_egress_rule" "tasks_all" {
 # ---------------------------------------------------------------------------
 
 locals {
-  image = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
+  image = "${var.image_repository_url}:${var.image_tag}"
 
   container_definition = {
     name      = var.name

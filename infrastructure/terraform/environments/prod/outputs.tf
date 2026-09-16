@@ -8,9 +8,9 @@ output "alb_dns_name" {
   value       = module.compute.alb_dns_name
 }
 
-output "ecr_repository_url" {
-  description = "Repository the CD pipeline pushes images to."
-  value       = module.compute.ecr_repository_url
+output "image_repository_url" {
+  description = "Shared repository this environment pulls from. Created once by infrastructure/terraform/cicd, so a promoted artifact is the same bytes everywhere."
+  value       = module.compute.image_repository_url
 }
 
 output "ecs_cluster_name" {

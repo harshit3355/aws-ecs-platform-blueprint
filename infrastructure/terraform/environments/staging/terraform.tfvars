@@ -5,7 +5,10 @@ vpc_cidr           = "10.20.0.0/16"
 log_retention_days = 14
 
 # Subscriptions must be confirmed from the inbox before they deliver anything.
-alert_email_addresses = []
+alert_email_addresses = ["alerts@example.com"]
 
 # slack_webhook_url is intentionally absent. It is a credential:
 #   export TF_VAR_slack_webhook_url=...
+
+# From: terraform -chdir=../../cicd output -raw image_repository_url
+# image_repository_url = "<account>.dkr.ecr.ap-south-1.amazonaws.com/meridian"

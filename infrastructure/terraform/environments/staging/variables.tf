@@ -52,3 +52,8 @@ variable "slack_webhook_url" {
   default     = null
   sensitive   = true
 }
+
+variable "image_repository_url" {
+  description = "Shared ECR repository, from `terraform output image_repository_url` in infrastructure/terraform/cicd. One registry serves every environment so a promoted artifact is the same bytes."
+  type        = string
+}

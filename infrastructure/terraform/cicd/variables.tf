@@ -56,3 +56,9 @@ variable "max_session_seconds" {
   type        = number
   default     = 3600
 }
+
+variable "keep_last_images" {
+  description = "Number of tagged release images to retain. Each retained image is a rollback target, so this is a recovery-window setting as much as a storage one."
+  type        = number
+  default     = 10
+}

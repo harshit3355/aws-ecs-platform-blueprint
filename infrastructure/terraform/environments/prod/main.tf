@@ -85,8 +85,9 @@ module "compute" {
   public_subnet_ids  = module.network.public_subnet_ids
   private_subnet_ids = module.network.private_subnet_ids
 
-  image_tag      = var.image_tag
-  container_port = 8000
+  image_repository_url = var.image_repository_url
+  image_tag            = var.image_tag
+  container_port       = 8000
 
   task_cpu    = 512
   task_memory = 1024

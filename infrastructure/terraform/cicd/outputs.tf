@@ -17,3 +17,13 @@ output "trusted_deploy_subjects" {
   description = "Exact OIDC subject claims permitted to assume the deploy role."
   value       = local.deploy_subjects
 }
+
+output "image_repository_url" {
+  description = "Shared container registry. Pass into every environment, and set as the ECR_REPOSITORY repository variable."
+  value       = aws_ecr_repository.app.repository_url
+}
+
+output "image_repository_name" {
+  description = "Repository name, for the ECR_REPOSITORY GitHub variable."
+  value       = aws_ecr_repository.app.name
+}

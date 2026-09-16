@@ -224,16 +224,15 @@ variable "log_bucket_force_destroy" {
   default     = false
 }
 
-variable "ecr_keep_last_images" {
-  description = "Number of tagged release images to retain in ECR."
-  type        = number
-  default     = 10
-}
-
 variable "tags" {
   description = "Tags applied to every resource in this module."
   type        = map(string)
   default     = {}
+}
+
+variable "image_repository_url" {
+  description = "ECR repository the task definition pulls from. Created once in infrastructure/terraform/cicd and shared by every environment, so the artifact promoted to production is the one staging ran."
+  type        = string
 }
 
 variable "db_security_group_id" {
