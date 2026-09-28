@@ -30,6 +30,29 @@ aws sts get-caller-identity     # confirm the account before anything else
 export AWS_REGION=ap-south-1
 ```
 
+### On Windows PowerShell
+
+Every command below is written for bash. Two differences matter, and both fail
+in ways that do not point at the cause:
+
+```powershell
+$env:AWS_REGION = "ap-south-1"                       # not: export AWS_REGION=...
+terraform init "-backend-config=backend.hcl"         # note the quotes
+terraform plan "-var=image_repository_url=$REPO"     # note the quotes
+```
+
+PowerShell splits a native command's arguments on `=`, so an unquoted
+`-backend-config=backend.hcl` arrives at Terraform as two arguments. Terraform
+then reports:
+
+```
+Error: No positional arguments are expected
+```
+
+which reads like a syntax mistake in the command rather than a quoting problem
+in the shell. Quote any argument containing `=`, or run these from Git Bash,
+where the issue does not arise.
+
 The region matters in two places: the `aws_region` variable, and the `region`
 in each `backend.hcl`. They must agree.
 

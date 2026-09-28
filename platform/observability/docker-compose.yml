@@ -1,4 +1,4 @@
-# Local mirror of the production observability story.
+# Local mirror of the production observability.
 #
 # Production sends infrastructure/RDS/ALB telemetry to CloudWatch (Terraform) and
 # scrapes the same /metrics endpoint with Prometheus. This stack exists so the
